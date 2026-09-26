@@ -8,3 +8,5 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+
+- Keep VeriLex analysis frontend-only and deterministic; this preserves a simple, explainable hackathon demo without external services.
