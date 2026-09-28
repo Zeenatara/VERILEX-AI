@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { createFileRoute, Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowRight, CircleAlert, Scale } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -52,8 +52,13 @@ function LoginPage() {
   const navigate = useNavigate();
   const search = useSearch({ from: "/login" });
 
+  useEffect(() => {
+    if (!loading && user) {
+      navigate({ to: search.redirect || "/" });
+    }
+  }, [loading, user, navigate, search.redirect]);
+
   if (!loading && user) {
-    navigate({ to: search.redirect || "/" });
     return null;
   }
 
