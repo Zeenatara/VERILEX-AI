@@ -155,7 +155,7 @@ async function runGeminiAnalysis(question: string, answer: string, jurisdiction:
 
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: process.env["GEMINI_MODEL"] || "gemini-3.8-flash",
         contents: buildUserPrompt(question, answer, jurisdiction),
         config: {
           systemInstruction: SYSTEM_INSTRUCTION,
