@@ -1,25 +1,5 @@
 -- VeriLex core schema: profiles + analyses, with RLS locked to the owning user.
--- Safe to re-run: every statement is guarded (if not exists / drop-then-create).
-
--- If an older/incompatible "analyses" table already exists (missing the
--- "question" column), drop it -- but ONLY when it is empty. If it has rows,
--- stop with an error instead of deleting anything.
-do $$
-begin
-  if to_regclass('public.analyses') is not null
-     and not exists (
-       select 1 from information_schema.columns
-       where table_schema = 'public'
-         and table_name = 'analyses'
-         and column_name = 'question'
-     ) then
-    if (select count(*) from public.analyses) = 0 then
-      drop table public.analyses;
-    else
-      raise exception 'analyses has rows and a different schema; not dropping';
-    end if;
-  end if;
-end $$;
+-- Safe to re-run. Never drops tables.
 
 create extension if not exists pgcrypto;
 
@@ -98,36 +78,69 @@ create trigger on_auth_user_created
 
 -- =========================================================
 -- analyses
+-- Works on a fresh database AND on a project that already has an older
+-- "analyses" table (id, user_id, input_text, overall_result, created_at):
+-- missing columns are added in place, nothing is dropped, and tables that
+-- reference analyses (e.g. safety_checks, red_team_tests) keep working.
 -- =========================================================
 create table if not exists public.analyses (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
-  question text not null,
-  answer text not null,
+  user_id uuid references auth.users (id) on delete cascade,
+  question text,
+  answer text,
   jurisdiction text,
   summary text,
-  result jsonb not null,
+  result jsonb,
   created_at timestamptz not null default now()
 );
+
+alter table public.analyses add column if not exists question text;
+alter table public.analyses add column if not exists answer text;
+alter table public.analyses add column if not exists jurisdiction text;
+alter table public.analyses add column if not exists summary text;
+alter table public.analyses add column if not exists result jsonb;
+
+-- Older schema required input_text; the app no longer writes it.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'analyses'
+      and column_name = 'input_text'
+  ) then
+    alter table public.analyses alter column input_text drop not null;
+  end if;
+end $$;
 
 create index if not exists analyses_user_id_idx on public.analyses (user_id);
 create index if not exists analyses_created_at_idx on public.analyses (created_at desc);
 
 alter table public.analyses enable row level security;
 
-drop policy if exists "analyses_select_own" on public.analyses;
+-- Replace any pre-existing policies so an overly permissive old one cannot
+-- defeat the owner-only rules below.
+do $$
+declare pol record;
+begin
+  for pol in
+    select policyname from pg_policies
+    where schemaname = 'public' and tablename = 'analyses'
+  loop
+    execute format('drop policy %I on public.analyses', pol.policyname);
+  end loop;
+end $$;
+
 create policy "analyses_select_own"
   on public.analyses for select
   to authenticated
   using (auth.uid() = user_id);
 
-drop policy if exists "analyses_insert_own" on public.analyses;
 create policy "analyses_insert_own"
   on public.analyses for insert
   to authenticated
   with check (auth.uid() = user_id);
 
-drop policy if exists "analyses_delete_own" on public.analyses;
 create policy "analyses_delete_own"
   on public.analyses for delete
   to authenticated
