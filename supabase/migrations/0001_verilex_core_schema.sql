@@ -1,6 +1,26 @@
 -- VeriLex core schema: profiles + analyses, with RLS locked to the owning user.
 -- Safe to re-run: every statement is guarded (if not exists / drop-then-create).
 
+-- If an older/incompatible "analyses" table already exists (missing the
+-- "question" column), drop it -- but ONLY when it is empty. If it has rows,
+-- stop with an error instead of deleting anything.
+do $$
+begin
+  if to_regclass('public.analyses') is not null
+     and not exists (
+       select 1 from information_schema.columns
+       where table_schema = 'public'
+         and table_name = 'analyses'
+         and column_name = 'question'
+     ) then
+    if (select count(*) from public.analyses) = 0 then
+      drop table public.analyses;
+    else
+      raise exception 'analyses has rows and a different schema; not dropping';
+    end if;
+  end if;
+end $$;
+
 create extension if not exists pgcrypto;
 
 -- =========================================================
@@ -114,3 +134,6 @@ create policy "analyses_delete_own"
   using (auth.uid() = user_id);
 
 -- No update policy: the app never edits a stored analysis in place.
+
+-- Make the API layer (PostgREST) pick up the new/changed tables immediately.
+notify pgrst, 'reload schema';

@@ -150,34 +150,53 @@ async function runGeminiAnalysis(question: string, answer: string, jurisdiction:
       await import("./gemini-prompt");
 
     const ai = new GoogleGenAI({ apiKey });
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 25_000);
+    const model = process.env["GEMINI_MODEL"] || "gemini-3.8-flash";
 
-    try {
-      const response = await ai.models.generateContent({
-        model: process.env["GEMINI_MODEL"] || "gemini-3.8-flash",
-        contents: buildUserPrompt(question, answer, jurisdiction),
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-          responseMimeType: "application/json",
-          responseSchema: RESPONSE_SCHEMA,
-          temperature: 0.2,
-          abortSignal: controller.signal,
-        },
-      });
-      const text = response.text;
-      if (!text || !text.trim()) {
-        console.error("[analyze] Gemini returned an empty response.");
-        return null;
+    // Google's models occasionally return 503 (overloaded) or 429 (rate limit).
+    // Those are temporary, so retry a couple of times before giving up and
+    // letting the deterministic rule engine serve the result.
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 25_000);
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: buildUserPrompt(question, answer, jurisdiction),
+          config: {
+            systemInstruction: SYSTEM_INSTRUCTION,
+            responseMimeType: "application/json",
+            responseSchema: RESPONSE_SCHEMA,
+            temperature: 0.2,
+            abortSignal: controller.signal,
+          },
+        });
+        const text = response.text;
+        if (!text || !text.trim()) {
+          console.error("[analyze] Gemini returned an empty response.");
+          return null;
+        }
+        const parsed = parseGeminiResult(text);
+        if (!parsed) {
+          console.error("[analyze] Gemini returned malformed JSON; discarding.");
+        }
+        return parsed;
+      } catch (error) {
+        const status = (error as { status?: number } | null)?.status;
+        const retryable = status === 503 || status === 429 || status === 500;
+        if (retryable && attempt < maxAttempts) {
+          console.warn(
+            `[analyze] Gemini temporarily unavailable (status ${status}); retry ${attempt}/${maxAttempts - 1}.`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+          continue;
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeout);
       }
-      const parsed = parseGeminiResult(text);
-      if (!parsed) {
-        console.error("[analyze] Gemini returned malformed JSON; discarding.");
-      }
-      return parsed;
-    } finally {
-      clearTimeout(timeout);
     }
+    return null;
   } catch (error) {
     console.error("[analyze] Gemini call failed:", error);
     return null;
